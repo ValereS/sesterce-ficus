@@ -1,0 +1,33 @@
+{
+  "name": "sesterce-ficus",
+  "version": "1.0.0",
+  "description": "Batch import your bank statements into Sesterce like a Roman treasurer. 🪙🏛",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ValereS/sesterce-ficus.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ValereS/sesterce-ficus/issues"
+  },
+  "homepage": "https://github.com/ValereS/sesterce-ficus#readme",
+  "dependencies": {
+    "csv-stringify": "^6.4.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/pdf-parse": "^1.1.2",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.0"
+  }
+}

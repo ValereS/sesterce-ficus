@@ -1,33 +1,31 @@
+#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
 const pdf = require('pdf-parse');
 const { stringify } = require('csv-stringify/sync');
 
-// Type-only imports (no runtime impact)
-import type { BankProfile, Transaction } from './types';
+// Type-only imports
+import type { BankProfile, Transaction, GroupConfig } from './types';
 
-// Runtime import for profiles
+// Runtime imports
 const { profiles, detectProfile } = require('./profiles');
+const { loadConfig, formatDate } = require('./config');
 
-// --- CONFIGURATION ---
 const DEFAULT_OUTPUT_DIR = 'output';
-const DEFAULT_OUTPUT_SUFFIX = '_sestercefiscus';
+const DEFAULT_OUTPUT_SUFFIX = '_sestercfiscus';
 
-// --- MAIN FUNCTION ---
 async function main() {
-  // Parse CLI arguments
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.error('❌ Usage: node dist/index.js <path/to/statement.pdf> [--output-dir <dir>] [--suffix <suffix>]');
+    console.error('❌ Usage: node dist/index.js <path/to/statement.pdf>');
     process.exit(1);
   }
 
-  // Extract PDF path and optional args
   const pdfPath = args[0];
   let outputDir = DEFAULT_OUTPUT_DIR;
   let outputSuffix = DEFAULT_OUTPUT_SUFFIX;
 
-  // Parse optional arguments
+  // Parse CLI arguments (future: add --group <name>)
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--output-dir' && args[i + 1]) {
       outputDir = args[i + 1];
@@ -38,67 +36,94 @@ async function main() {
     }
   }
 
-  // 1. Check if PDF file exists
   if (!fs.existsSync(pdfPath)) {
     console.error(`❌ File not found: ${pdfPath}`);
     process.exit(1);
   }
 
-  // 2. Create output directory if it doesn't exist
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
     console.log(`📁 Created directory: ${outputDir}/`);
   }
 
-  // 3. Extract text from PDF
   const text = await extractTextFromPDF(pdfPath);
-
-  // 4. Detect bank profile
   const profile: BankProfile = detectProfile(text);
   console.log(`🏦 Detected bank profile: ${profile.name}`);
 
-  // 5. Parse transactions using the detected profile
-  const transactions: Transaction[] = profile.parseTransactions(text);
+  const { group } = loadConfig();
+  console.log(`👥 Group: ${group.members.join(', ')} (Payer: ${group.defaultPayer})`);
+  console.log(`💰 Split ratios: ${JSON.stringify(group.splitRatios)}`);
 
+  const transactions = profile.parseTransactions(text);
   if (transactions.length === 0) {
-    console.error('❌ No transactions found. The PDF format may not be supported yet.');
+    console.error('❌ No transactions found.');
     process.exit(1);
   }
 
-  // 6. Generate CSV filename
   const pdfBasename = path.basename(pdfPath, path.extname(pdfPath));
   const csvFilename = `${pdfBasename}${outputSuffix}.csv`;
   const outputPath = path.join(outputDir, csvFilename);
 
-  // 7. Generate CSV
-  const csv = generateSesterceCSV(transactions, profile);
-
-  // 8. Save CSV
+  const csv = generateSesterceCSV(transactions, group);
   fs.writeFileSync(outputPath, csv);
   console.log(`✅ CSV generated: ${outputPath}`);
-  console.log(`   → Open ${outputPath} in Excel to remove unwanted rows.`);
-  console.log(`   → Import it at https://app.sesterce.io/import`);
+  console.log(`   → Open in Excel to review and import to Sesterce.`);
 }
 
-// --- EXTRACT TEXT FROM PDF ---
 async function extractTextFromPDF(pdfPath: string): Promise<string> {
   const dataBuffer = fs.readFileSync(pdfPath);
   const data = await pdf(dataBuffer);
   return data.text;
 }
 
-// --- GENERATE SESTERCE-COMPATIBLE CSV ---
-function generateSesterceCSV(transactions: Transaction[], profile?: BankProfile): string {
-  const csvData = transactions.map((t: Transaction) => ({
-    Date: t.date,
-    Title: t.description,
-    'Paid by You': Math.abs(t.amount),
-    'Paid for You': 0,
-    Currency: 'EUR',
-  }));
+function generateSesterceCSV(transactions: Transaction[], group: GroupConfig): string {
+  const { members, defaultPayer, splitRatios, currency, defaultCategory, defaultComment, defaultTags, dateFormat } = group;
 
-  return stringify(csvData, { header: true, delimiter: ',' });
+  // Calculate total ratio for splits
+  const totalRatio = Object.values(splitRatios).reduce((sum, ratio) => sum + ratio, 0);
+
+  const csvData = transactions.map((t) => {
+    // Build row in EXACT order: Date, Title, Paid by..., Paid for..., Currency, Category, Exchange Rate, Comment, Tags
+    const row: Record<string, string | number> = {};
+
+    // 1. Date (formatted)
+    row.Date = formatDate(t.date, dateFormat);
+
+    // 2. Title
+    row.Title = t.description;
+
+    // 3-4. Paid by columns (in order of members array)
+    members.forEach(member => {
+      row[`Paid by ${member}`] = member === defaultPayer ? Math.abs(t.amount) : 0;
+    });
+
+    // 5-6. Paid for columns (in order of members array)
+    members.forEach(member => {
+      const ratio = splitRatios[member] || 0;
+      const amountForMember = (Math.abs(t.amount) * ratio) / totalRatio;
+      row[`Paid for ${member}`] = amountForMember;
+    });
+
+    // 7. Currency
+    row.Currency = currency;
+
+    // 8. Category
+    row.Category = defaultCategory;
+
+    // 9. Exchange Rate
+    row['Exchange Rate'] = 1;
+
+    // 10. Comment
+    row.Comment = defaultComment;
+
+    // 11. Tags
+    row.Tags = defaultTags;
+
+    return row;
+  });
+
+  // Use semicolon (;) as delimiter for Sesterce
+  return stringify(csvData, { header: true, delimiter: ';' });
 }
 
-// --- EXECUTION ---
 main().catch((err) => console.error('❌ Error:', err.message));

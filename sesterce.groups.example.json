@@ -1,0 +1,18 @@
+{
+  "defaultGroup": "family",
+  "groups": {
+    "family": {
+      "members": ["Momo", "Mom2o"],
+      "defaultPayer": "Momo",
+      "splitRatios": {
+        "Momo": 1,
+        "Mom2o": 2
+      },
+      "currency": "EUR",
+      "defaultCategory": "Enfants",
+      "defaultComment": "paid cash",
+      "defaultTags": "",
+      "dateFormat": "YYYYMMDD"
+    }
+  }
+}

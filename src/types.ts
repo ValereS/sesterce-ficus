@@ -1,16 +1,29 @@
+// src/types.ts
 export interface Transaction {
   date: string;
   description: string;
   amount: number;
-  isCredit: boolean; // true if credit, false if debit
+  isCredit: boolean;
+}
+
+export interface GroupConfig {
+  members: string[];
+  defaultPayer: string;
+  splitRatios: Record<string, number>;
+  currency: string;
+  defaultCategory: string;
+  defaultComment: string;
+  defaultTags: string;
+  dateFormat: 'DD/MM/YYYY' | 'YYYYMMDD';
+}
+
+export interface SesterceConfig {
+  defaultGroup: string;
+  groups: Record<string, GroupConfig>;
 }
 
 export interface BankProfile {
   name: string;
-  // Regex to detect if this profile matches the PDF text
   detectionRegex: RegExp;
-  // Function to parse transactions from raw text
   parseTransactions: (text: string) => Transaction[];
-  // Optional: Custom CSV generation (if needed)
-  generateCSV?: (transactions: Transaction[]) => string;
 }

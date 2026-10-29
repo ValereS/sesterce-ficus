@@ -148,4 +148,8 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
+# Output
 output/*
+
+# Config
+sesterce.groups.json

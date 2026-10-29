@@ -1,121 +1,140 @@
 // src/profiles/banquePostale.ts
 import type { BankProfile, Transaction } from '../types';
 
+// Enable this to see debugging info
+const DEBUG = false;
+
 export const banquePostaleProfile: BankProfile = {
   name: 'Banque Postale',
   detectionRegex: /Compte Courant Postal|Banque Postale|IBAN : FL/i,
 
   parseTransactions: (text: string): Transaction[] => {
-    const transactions: Transaction[] = [];
-    const lines = text.split('\n');
+    // 🧹 Clean up: Remove ONLY the 3-digit number after "CARTE NUMERO"
+    const cleanedText = text
+      .replace(/CARTE (?:NUMERO|NO|N°)[\s:]*\d{3}/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    // Helper: Convert DD.MM.YY to DD/MM/YYYY
-    const convertPaymentDate = (dateStr: string): string => {
-      const [day, month, year] = dateStr.split('.');
-      return `${day}/${month}/20${year}`; // Assume 20XX
-    };
+    if (DEBUG) console.log('=== CLEANED TEXT ===');
+    if (DEBUG) console.log(cleanedText);
+    if (DEBUG) console.log('=== END CLEANED TEXT ===\n');
 
-    // Helper: Check if line is a header (skip these)
-    const isHeaderLine = (line: string): boolean => {
-      const trimmed = line.trim();
-      return (
-        trimmed.includes('Compte Courant Postal') ||
-        trimmed.includes('IBAN :') ||
-        trimmed.includes('BIC :') ||
-        trimmed.includes('Date Opérations') ||
-        trimmed.includes('Relevé n°') ||
-        trimmed.includes('Page') ||
-        trimmed.includes('Vos opérations') ||
-        trimmed === '' ||
-        /^\d+$/.test(trimmed) // Skip page numbers like "2/4"
-      );
-    };
+    // --- FIND START AND END MARKERS ---
+    // Start marker: "Ancien solde au DD/MM/YYYY AMOUNT" (e.g., "Ancien solde au 24/07/2026 3 815,74")
+    const startMarkerRegex = /Ancien solde au (\d{2}\/\d{2}\/\d{4}) (\d{1,3}(?: \d{3})*?,\d{2})/;
+    const startMatch = cleanedText.match(startMarkerRegex);
 
-    let currentDate = '';
-    let currentDescription = '';
-    let currentAmount: number | null = null;
-    let currentPaymentDate: string | null = null;
+    let transactionText = '';
+    if (startMatch) {
+      // Find everything AFTER the start marker
+      const startIndex = startMatch.index! + startMatch[0].length;
+      transactionText = cleanedText.substring(startIndex);
 
-    for (const line of lines) {
-      if (isHeaderLine(line)) continue;
-
-      // --- CASE 1: Line starts with a date (DD/MM or DD/MM/YYYY) ---
-      const dateMatch = line.match(/^\s*(\d{2}\/\d{2}(?:\/\d{4})?)\s*(.*)/);
-      if (dateMatch) {
-        // Save previous transaction if exists
-        if (currentDate && currentDescription && currentAmount !== null) {
-          const finalDate = currentPaymentDate
-            ? convertPaymentDate(currentPaymentDate)
-            : currentDate;
-          transactions.push({
-            date: finalDate,
-            description: currentDescription.trim(),
-            amount: currentAmount,
-            isCredit: currentAmount > 0,
-          });
-        }
-
-        // Start new transaction
-        currentDate = dateMatch[1];
-        currentDescription = dateMatch[2].trim();
-        currentAmount = null;
-        currentPaymentDate = null;
-
-        // Check for payment date (DD.MM.YY) in the same line
-        const paymentDateMatch = currentDescription.match(/(\d{2}\.\d{2}\.\d{2})/);
-        if (paymentDateMatch) {
-          currentPaymentDate = paymentDateMatch[1];
-          // Remove payment date from description
-          currentDescription = currentDescription
-            .replace(paymentDateMatch[1], '')
-            .trim();
-        }
-        continue;
-      }
-
-      // --- CASE 2: Line contains an amount (e.g., "1,20" or "1 200,07") ---
-      const amountMatch = line.match(/([-+]?\d{1,3}(?:[ \d]{3})*(?:,\d{2})?)/);
-      if (amountMatch && currentDate) {
-        const amountStr = amountMatch[1].replace(/ /g, '').replace(',', '.');
-        currentAmount = parseFloat(amountStr);
-
-        // If we have all parts, save the transaction
-        if (currentDescription) {
-          const finalDate = currentPaymentDate
-            ? convertPaymentDate(currentPaymentDate)
-            : currentDate;
-          transactions.push({
-            date: finalDate,
-            description: currentDescription.trim(),
-            amount: currentAmount,
-            isCredit: currentAmount > 0,
-          });
-          // Reset for next transaction
-          currentDate = '';
-          currentDescription = '';
-          currentAmount = null;
-          currentPaymentDate = null;
-        }
-        continue;
-      }
-
-      // --- CASE 3: Line is part of the description (e.g., "CARTE NUMERO 415") ---
-      if (currentDate) {
-        currentDescription += ' ' + line.trim();
-      }
+      if (DEBUG) console.log(`🏁 Start marker found: "${startMatch[0]}"`);
+      if (DEBUG) console.log(`Transaction text starts at index ${startIndex}`);
+    } else {
+      if (DEBUG) console.log('⚠️ No start marker found - using entire text');
+      transactionText = cleanedText;
     }
 
-    // --- Save the last transaction if it exists ---
-    if (currentDate && currentDescription && currentAmount !== null) {
-      const finalDate = currentPaymentDate
-        ? convertPaymentDate(currentPaymentDate)
-        : currentDate;
+   // End marker: "Total des" (more robust than "Total des opérations")
+    const endMarkerIndex = transactionText.search(/Total des/i);
+    if (endMarkerIndex !== -1) {
+      transactionText = transactionText.substring(0, endMarkerIndex);
+      if (DEBUG) console.log(`🛑 End marker found at index ${endMarkerIndex}`);
+    } else {
+      if (DEBUG) console.log('⚠️ No end marker found - using text until end');
+    }
+
+    if (DEBUG) console.log('=== TRANSACTION TEXT ===');
+    if (DEBUG) console.log(transactionText);
+    if (DEBUG) console.log('=== END TRANSACTION TEXT ===\n');
+
+    // --- PROCESS TRANSACTIONS ---
+    const transactions: Transaction[] = [];
+
+    // Split into transaction blocks using DD/MM as delimiter
+    const blocks = transactionText.split(/(\d{2}\/\d{2})/g)
+      .filter(part => part.trim() !== '')
+      .reduce((acc: string[][], part, index) => {
+        if (part.match(/^\d{2}\/\d{2}$/)) {
+          acc.push([part]);
+        } else {
+          if (acc.length > 0) {
+            acc[acc.length - 1].push(part);
+          }
+        }
+        return acc;
+      }, []);
+
+    for (const block of blocks) {
+      if (block.length === 0) continue;
+
+      // First part is always the date (DD/MM)
+      const date = block[0];
+
+      // Join the rest as the content
+      const content = block.slice(1).join(' ');
+
+      // Extract payment date (DD.MM.YY) if present
+      let paymentDate: string | null = null;
+      const paymentDateMatch = content.match(/(\d{2}\.\d{2}\.\d{2})/);
+      if (paymentDateMatch) {
+        paymentDate = paymentDateMatch[1];
+      }
+
+      // Extract amount (last number with 2 decimals, handling spaces)
+      const amountMatches = content.match(/(\d{1,3}(?: \d{3})*?,\d{2})/g) || [];
+      if (amountMatches.length === 0) {
+        if (DEBUG) console.log(`❌ No amount found in block: ${content}`);
+        continue;
+      }
+
+      // Use the last amount match
+      const lastAmountMatch = amountMatches[amountMatches.length - 1];
+      const amountStr = lastAmountMatch.replace(/ /g, '').replace(',', '.');
+      const amount = parseFloat(amountStr);
+
+      // Extract description (remove date, payment date, and amount)
+      let description = content
+        .replace(paymentDate || '', '')
+        .replace(lastAmountMatch, '')
+        .replace(date, '')
+        .trim();
+
+      // Clean description
+      description = description
+        .replace(/REFERENCE\s*:.*$/i, '')
+        .replace(/MANDAT\s*:.*$/i, '')
+        .replace(/IDENT\s*:.*$/i, '')
+        .replace(/\b[A-Za-z]+\d{5,}\b/g, '')
+        .replace(/\b\d{10,}\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      // Format date
+      let finalDate = date;
+      if (paymentDate) {
+        const [day, month, year] = paymentDate.split('.');
+        finalDate = `${day}/${month}/20${year}`;
+      } else if (finalDate.match(/^\d{2}\/\d{2}$/)) {
+        finalDate = `${finalDate}/2026`;
+      }
+
+      if (DEBUG) console.log(`✅ Transaction: date=${finalDate}, desc="${description}", amount=${amount}`);
+
       transactions.push({
         date: finalDate,
-        description: currentDescription.trim(),
-        amount: currentAmount,
-        isCredit: currentAmount > 0,
+        description: description,
+        amount: amount,
+        isCredit: false,
       });
+    }
+
+    if (DEBUG) {
+      console.log('\n=== FINAL TRANSACTIONS ===');
+      console.log(transactions);
+      console.log('=== END ===\n');
     }
 
     return transactions;

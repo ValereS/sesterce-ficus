@@ -76,54 +76,56 @@ async function extractTextFromPDF(pdfPath: string): Promise<string> {
   return data.text;
 }
 
-function generateSesterceCSV(transactions: Transaction[], group: GroupConfig): string {
+function generateSesterceCSV(
+  transactions: Transaction[],
+  group: GroupConfig
+): string {
   const { members, defaultPayer, splitRatios, currency, defaultCategory, defaultComment, defaultTags, dateFormat } = group;
 
   // Calculate total ratio for splits
   const totalRatio = Object.values(splitRatios).reduce((sum, ratio) => sum + ratio, 0);
 
+  // Define the EXACT column order you want
+  const columnOrder = [
+    'Date', 'Title',
+    ...members.map(m => `Paid by ${m}`),
+    ...members.map(m => `Paid for ${m}`),
+    'Currency', 'Category', 'Exchange Rate', 'Comment', 'Tags'
+  ];
+
   const csvData = transactions.map((t) => {
-    // Build row in EXACT order: Date, Title, Paid by..., Paid for..., Currency, Category, Exchange Rate, Comment, Tags
-    const row: Record<string, string | number> = {};
+    const row: Record<string, string | number> = {
+      Date: dateFormat === 'YYYYMMDD' ? t.date.replace(/\//g, '') : t.date,
+      Title: t.description,
+      Currency: currency,
+      Category: defaultCategory,
+      'Exchange Rate': 1,
+      Comment: defaultComment,
+      Tags: defaultTags,
+    };
 
-    // 1. Date (formatted)
-    row.Date = formatDate(t.date, dateFormat);
-
-    // 2. Title
-    row.Title = t.description;
-
-    // 3-4. Paid by columns (in order of members array)
+    // Paid by columns: Only defaultPayer pays the full amount
     members.forEach(member => {
       row[`Paid by ${member}`] = member === defaultPayer ? Math.abs(t.amount) : 0;
     });
 
-    // 5-6. Paid for columns (in order of members array)
+    // Paid for columns: Split amount according to ratios
     members.forEach(member => {
       const ratio = splitRatios[member] || 0;
       const amountForMember = (Math.abs(t.amount) * ratio) / totalRatio;
       row[`Paid for ${member}`] = amountForMember;
     });
 
-    // 7. Currency
-    row.Currency = currency;
-
-    // 8. Category
-    row.Category = defaultCategory;
-
-    // 9. Exchange Rate
-    row['Exchange Rate'] = 1;
-
-    // 10. Comment
-    row.Comment = defaultComment;
-
-    // 11. Tags
-    row.Tags = defaultTags;
-
-    return row;
+    // Create array in the exact column order
+    const orderedRow = columnOrder.map(col => row[col]);
+    return orderedRow;
   });
 
-  // Use semicolon (;) as delimiter for Sesterce
-  return stringify(csvData, { header: true, delimiter: ';' });
+  // Generate CSV with headers in the exact order
+  return [
+    columnOrder.join(';'),  // Header row
+    ...csvData.map(row => row.join(';'))  // Data rows
+  ].join('\n');
 }
 
 main().catch((err) => console.error('❌ Error:', err.message));

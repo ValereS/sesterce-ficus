@@ -1,0 +1,18 @@
+{
+  "defaultGroup": "La Famille Raton",
+  "groups": {
+    "La Famille Raton": {
+      "members": ["Lisa", "Vaval"],
+      "defaultPayer": "Vaval",
+      "splitRatios": {
+        "Lisa": 1,
+        "Vaval": 2
+      },
+      "currency": "EUR",
+      "defaultCategory": "",
+      "defaultComment": "",
+      "defaultTags": "",
+      "dateFormat": "YYYYMMDD"
+    }
+  }
+}

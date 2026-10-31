@@ -152,4 +152,4 @@ vite.config.ts.timestamp-*
 output/*
 
 # Config
-sesterce.groups.json
+#sesterce.groups.json

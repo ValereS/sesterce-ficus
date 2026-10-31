@@ -1,15 +1,10 @@
-#!/usr/bin/env node
-const fs = require('fs');
-const path = require('path');
-const pdf = require('pdf-parse');
-const { stringify } = require('csv-stringify/sync');
-
-// Type-only imports
-import type { BankProfile, Transaction, GroupConfig } from './types';
-
-// Runtime imports
-const { profiles, detectProfile } = require('./profiles');
-const { loadConfig, formatDate } = require('./config');
+// src/index.ts
+import * as fs from 'fs';
+import * as path from 'path';
+import pdf from 'pdf-parse';
+import { loadConfig } from './config';
+import { banquePostaleProfile } from './profiles/banque-postale';
+import type { GroupConfig, Transaction } from './types';
 
 const DEFAULT_OUTPUT_DIR = 'output';
 const DEFAULT_OUTPUT_SUFFIX = '_sestercfiscus';
@@ -25,7 +20,6 @@ async function main() {
   let outputDir = DEFAULT_OUTPUT_DIR;
   let outputSuffix = DEFAULT_OUTPUT_SUFFIX;
 
-  // Parse CLI arguments (future: add --group <name>)
   for (let i = 1; i < args.length; i++) {
     if (args[i] === '--output-dir' && args[i + 1]) {
       outputDir = args[i + 1];
@@ -47,12 +41,13 @@ async function main() {
   }
 
   const text = await extractTextFromPDF(pdfPath);
-  const profile: BankProfile = detectProfile(text);
+  const profile = banquePostaleProfile;
   console.log(`🏦 Detected bank profile: ${profile.name}`);
 
   const { group } = loadConfig();
-  console.log(`👥 Group: ${group.members.join(', ')} (Payer: ${group.defaultPayer})`);
-  console.log(`💰 Split ratios: ${JSON.stringify(group.splitRatios)}`);
+  console.log(`👥 Group Members: ${group.members.join(', ')}`);
+  console.log(`💰 Default Payer: ${group.defaultPayer}`);
+  console.log(`📊 Split Ratios:`, group.splitRatios);
 
   const transactions = profile.parseTransactions(text);
   if (transactions.length === 0) {
@@ -64,10 +59,10 @@ async function main() {
   const csvFilename = `${pdfBasename}${outputSuffix}.csv`;
   const outputPath = path.join(outputDir, csvFilename);
 
-  const csv = generateSesterceCSV(transactions, group);
+  const csv = generateSesterceCSV(transactions, group, profile.name);
   fs.writeFileSync(outputPath, csv);
+
   console.log(`✅ CSV generated: ${outputPath}`);
-  console.log(`   → Open in Excel to review and import to Sesterce.`);
 }
 
 async function extractTextFromPDF(pdfPath: string): Promise<string> {
@@ -76,16 +71,16 @@ async function extractTextFromPDF(pdfPath: string): Promise<string> {
   return data.text;
 }
 
-function generateSesterceCSV(
-  transactions: Transaction[],
-  group: GroupConfig
-): string {
+function generateSesterceCSV(transactions: Transaction[], group: GroupConfig, profileName?: string): string {
   const { members, defaultPayer, splitRatios, currency, defaultCategory, defaultComment, defaultTags, dateFormat } = group;
+
+  // Add "BqPt" to comment if this is Banque Postale
+  const comment = profileName === 'Banque Postale' ? `${defaultComment} BqPt`.trim() : defaultComment;
 
   // Calculate total ratio for splits
   const totalRatio = Object.values(splitRatios).reduce((sum, ratio) => sum + ratio, 0);
 
-  // Define the EXACT column order you want
+  // Define column order
   const columnOrder = [
     'Date', 'Title',
     ...members.map(m => `Paid by ${m}`),
@@ -94,37 +89,38 @@ function generateSesterceCSV(
   ];
 
   const csvData = transactions.map((t) => {
-    const row: Record<string, string | number> = {
+    const row: Record<string, string> = {
       Date: dateFormat === 'YYYYMMDD' ? t.date.replace(/\//g, '') : t.date,
       Title: t.description,
       Currency: currency,
       Category: defaultCategory,
-      'Exchange Rate': 1,
-      Comment: defaultComment,
+      'Exchange Rate': '1.00',
+      Comment: comment,  // ✅ Uses modified comment with "BqPt"
       Tags: defaultTags,
     };
 
-    // Paid by columns: Only defaultPayer pays the full amount
+    // Paid by: Only defaultPayer gets the full amount
     members.forEach(member => {
-      row[`Paid by ${member}`] = member === defaultPayer ? Math.abs(t.amount) : 0;
+      row[`Paid by ${member}`] = member === defaultPayer ? Math.abs(t.amount).toFixed(2) : '0.00';
     });
 
-    // Paid for columns: Split amount according to ratios
+    // Paid for: Apply split ratios from config
     members.forEach(member => {
       const ratio = splitRatios[member] || 0;
-      const amountForMember = (Math.abs(t.amount) * ratio) / totalRatio;
-      row[`Paid for ${member}`] = amountForMember;
+      if (ratio > 0 && totalRatio > 0) {
+        const amountForMember = (Math.abs(t.amount) * ratio) / totalRatio;
+        row[`Paid for ${member}`] = amountForMember.toFixed(2);
+      } else {
+        row[`Paid for ${member}`] = '0.00';
+      }
     });
 
-    // Create array in the exact column order
-    const orderedRow = columnOrder.map(col => row[col]);
-    return orderedRow;
+    return columnOrder.map(col => row[col]);
   });
 
-  // Generate CSV with headers in the exact order
   return [
-    columnOrder.join(';'),  // Header row
-    ...csvData.map(row => row.join(';'))  // Data rows
+    columnOrder.join(';'),
+    ...csvData.map(row => row.join(';'))
   ].join('\n');
 }
 
